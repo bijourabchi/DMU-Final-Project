@@ -1,3 +1,5 @@
+using Plots
+using RINAO
 
 filepath = "../../RINAO.jl/"
 
@@ -18,6 +20,25 @@ op_files = [S1,S2,S3,S4,S5,S6,S7,S8,S9,S10]
 # op_files = [S6]
 toPlot = true
 γ = 0.95
-include(S5)
+include(S2)
 inputJSON = "../RINAO.jl/" * inputJSON
 db, vars, inputs = processJSONInputs(inputJSON, toPlot)
+
+# Extract and plot reward map
+reward = db.reward
+
+# Create a clean heatmap of the reward matrix (flip vertically to correct lat/long orientation)
+heatmap(
+    reverse(reward; dims=1),
+    title="Reward Map",
+    xlabel="X Coordinate",
+    ylabel="Y Coordinate",    colorbar=true,    colorbar_title="Reward Value",
+    color=:plasma,
+    size=(900, 700),
+    margin=5Plots.mm,
+    xticks=(1:10:size(reward, 2), string.(1:10:size(reward, 2))),
+    yticks=(1:10:size(reward, 1), string.(1:10:size(reward, 1))),
+    legend=false,
+    framestyle=:box,
+    dpi=150
+)
