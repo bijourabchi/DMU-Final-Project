@@ -1,0 +1,23 @@
+# Ignore ArcGIS output directory
+arcgis_output/
+
+# Julia-specific files
+*.jl.cov
+*.jl.*.cov
+*.jl.mem
+/deps/deps.jl
+
+# Compiled files
+*.o
+*.so
+*.dylib
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# System files
+.DS_Store
+Thumbs.db
