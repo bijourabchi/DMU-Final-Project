@@ -12,6 +12,9 @@ arcgis_output/
 *.so
 *.dylib
 
+# images
+*.png
+figures/
 # IDE
 .vscode/
 .idea/

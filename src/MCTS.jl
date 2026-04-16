@@ -5,11 +5,13 @@ include("generateMDP.jl")
 
 const waypoint_bonus = 1000
 const visited_bonus = -100
+const obstacle_bonus = -1e10
 
 mutable struct MCTS
     ## Tracking MCTS properties
     wp
     visited
+    obstacles
     N # (S,A) Counter
     Q
     t # (S A Sp) Counter
@@ -90,14 +92,23 @@ function simulate!(m::MCTS,s, d = 100)
     sp = m.T(s,a,m.R)
 
     r = m.R[sp[1],sp[2]]
+    alpha = 0
+    if r < 0.5
+        alpha = 0.5
+    end
+
     if euclidean_distance(s,m.wp[1]) > euclidean_distance(sp,m.wp[1])
-        r += 1/euclidean_distance(sp,m.wp[1])
+        r += alpha + 1/euclidean_distance(sp,m.wp[1])
     end
 
     if sp in m.visited
         r = visited_bonus
-    elseif sp in m.wp
+    end
+    if sp in m.wp
         r = waypoint_bonus
+    end
+    if sp in m.obstacles
+        r = obstacle_bonus
     end
     
     Q = r + γ * simulate!(m,s,d-1)
@@ -129,10 +140,11 @@ function select_action(m,s,A)
     for _ in  1:1000
         simulate!(m,s) # 1000 iterations to choose each action, d = 100 by default
     end
+
     return argmax(a -> m.Q[(s,a)], A)
 end
 
-function evaluate(s0,wp,max_steps = 100)
+function evaluate(s0,wp,obstacles,max_steps = 100)
 
     println("Starting MCTS Planning")
     rtot = 0
@@ -151,8 +163,10 @@ function evaluate(s0,wp,max_steps = 100)
     tt = Dict{Tuple{S, Atype, S}, Int}()
 
     visited = [s]
+    A = [:left, :right, :up, :down, :upright, :upleft, :downright, :downleft]
 
-    m = MCTS(wp,visited,n,q,tt,R,A,Tr,0.95)
+    
+    m = MCTS(wp,visited,obstacles, n,q,tt,R,A,Tr,0.95)
 
     
     while s != wp[1] && t < max_steps
@@ -160,7 +174,6 @@ function evaluate(s0,wp,max_steps = 100)
         
         a = select_action(m,s, A)
         sp = Tr(s,a,R)
-
         r = R[sp[1],sp[2]]
         rtot += r
         t += 1
@@ -173,57 +186,74 @@ function evaluate(s0,wp,max_steps = 100)
         end
     end
 
+    if s != wp[1] # Did not reach waypoint
+        rtot = -Inf
+    end
+
     return (hist, rtot)
 end
-R = GenerateMDP.get_reward_map(9)
-wp = [(50,50)]
 
-R[50,50] = 20
-
-
-s0 = GenerateMDP.sample_init_state()
-#s0 = (61, 80)
-hist, rtot = evaluate(s0,wp)
+if abspath("MCTS.jl") == @__FILE__
+    R = GenerateMDP.get_reward_map(2)
+    wp = [(50,50)]
 
 
 
-# Create heatmap
-p = heatmap(
-    R,
-    title="Reward Map with State History",
-    xlabel="X Coordinate",
-    ylabel="Y Coordinate",
-    colorbar=true,
-    colorbar_title="Reward Value",
-    color=:plasma,
-    clims=(0, 1),  # Scale colors to focus on 0-1 range
-    size=(900, 700),
-    margin=5Plots.mm,
-    xlim=(0.5, size(R, 2) + 0.5),
-    ylim=(0.5, size(R, 1) + 0.5),
-    xticks=(1:10:size(R, 2), string.(1:10:size(R, 2))),
-    yticks=(1:10:size(R, 1), string.(1:10:size(R, 1))),
-    legend=true,
-    framestyle=:box,
-    dpi=150
-)
 
-# Extract x and y coordinates from state history
-hist_x = [s[1] for s in hist]
-hist_y = [s[2] for s in hist]
+    #s0 = GenerateMDP.sample_init_state()
+    s0 = (41, 21)
 
-# Overlay state history path
-plot!(p, hist_y, hist_x, label="State History", color=:red, linewidth=2, alpha=0.7)
+    ox = 30:1:45
+    oy = [31,32]
+    obstacles = [(x,y) for x in ox for y in oy]
 
-# Overlay state history points
-scatter!(p, hist_y, hist_x, label="Path Points", color=:red, markersize=4, alpha=0.6)
 
-# Overlay waypoints
-wp_x = [w[1] for w in wp]
-wp_y = [w[2] for w in wp]
-scatter!(p, wp_y, wp_x, label="Waypoints", color=:lime, markersize=8, markerstrokewidth=2, markerstrokecolor=:black)
+    hist, rtot = evaluate(s0,wp, obstacles)
 
-# Display starting point
-scatter!(p, [hist_y[1]], [hist_x[1]], label="Start", color=:cyan, markersize=8, markerstrokewidth=2, markerstrokecolor=:black)
 
-p
+
+    # Create heatmap
+    p = heatmap(
+        R,
+        title="Reward Map with State History",
+        xlabel="X Coordinate",
+        ylabel="Y Coordinate",
+        colorbar=true,
+        colorbar_title="Reward Value",
+        color=:plasma,
+        clims=(0, 1),  # Scale colors to focus on 0-1 range
+        size=(900, 700),
+        margin=5Plots.mm,
+        xlim=(0.5, size(R, 2) + 0.5),
+        ylim=(0.5, size(R, 1) + 0.5),
+        xticks=(1:10:size(R, 2), string.(1:10:size(R, 2))),
+        yticks=(1:10:size(R, 1), string.(1:10:size(R, 1))),
+        legend=true,
+        framestyle=:box,
+        dpi=150
+    )
+
+    # Extract x and y coordinates from state history
+    hist_x = [s[1] for s in hist]
+    hist_y = [s[2] for s in hist]
+
+    # Overlay state history path
+    plot!(p, hist_y, hist_x, label="State History", color=:red, linewidth=2, alpha=0.7)
+
+    # Overlay state history points
+    scatter!(p, hist_y, hist_x, label="Path Points", color=:red, markersize=4, alpha=0.6)
+
+    # Overlay waypoints
+    wp_x = [w[1] for w in wp]
+    wp_y = [w[2] for w in wp]
+    scatter!(p, wp_y, wp_x, label="Waypoints", color=:lime, markersize=8, markerstrokewidth=2, markerstrokecolor=:black)
+
+    # Display starting point
+    scatter!(p, [hist_y[1]], [hist_x[1]], label="Start", color=:cyan, markersize=8, markerstrokewidth=2, markerstrokecolor=:black)
+
+    # Overlay obstacles
+    ox = [o[1] for o in obstacles]
+    oy = [o[2] for o in obstacles]
+    scatter!(p, oy, ox, label="Obstacles", color=:black, markersize=4, alpha=0.6)
+    p
+end
