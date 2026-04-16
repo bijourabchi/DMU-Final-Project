@@ -16,6 +16,7 @@ S7 = filepath * "Operator_data/Brainard/Brainard_S7.jl"
 S8 = filepath * "Operator_data/Brainard/Brainard_S8.jl"
 S9 = filepath * "Operator_data/Brainard/Brainard_S9.jl"
 S10 = filepath * "Operator_data/Brainard/Brainard_S10.jl"
+
 op_files = [S1,S2,S3,S4,S5,S6,S7,S8,S9,S10]
 # op_files = [S6]
 toPlot = false

@@ -25,6 +25,9 @@ const INITIAL_STATES = [
     (61, 21), (61, 60), (61, 80),
 ]
 
+function sample_init_state()
+    return rand(INITIAL_STATES)
+end
 function next_state(s, a)
     x, y = s
     if a == :left

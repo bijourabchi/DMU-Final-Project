@@ -1,17 +1,11 @@
 include("generateMDP.jl")
 
-R = GenerateMDP.get_reward_map(9)
+reward = GenerateMDP.get_reward_map(1)
 
-function test(s,R)
-    return GenerateMDP.T(s,:right,R)
-end
 
-s = (61,61)
-
-println(test(s,R))
 
 heatmap(
-    R,
+    reward,
     title="Reward Map",
     xlabel="X Coordinate",
     ylabel="Y Coordinate",    colorbar=true,    colorbar_title="Reward Value",
