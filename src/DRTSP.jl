@@ -187,10 +187,6 @@ abstract type AbstractMinExcessSolver end
 """
 A placeholder greedy solver.
 
-Important:
-    This is NOT the approximation algorithm from the paper.
-    It is only a scaffold so the outer driver can run.
-
 Idea:
     grow a path from s toward t by inserting intermediate waypoints
     that improve scaled-prize-per-added-cost until target K is reached,
@@ -199,17 +195,127 @@ Idea:
 struct GreedyMinExcessSolver <: AbstractMinExcessSolver
 end
 
+"""
+TO DO:
+    Implement apporoximate min-excess solver from paper. 
+    Obstacle avoidance in solving processing.
+"""
+struct DPMinExcessSolver <: AbstractMinExcessSolver
+end
 
 """
-Greedy placeholder for:
-    MinExcessPath(s, t, K, scaled_prize)
+Pseudo-polynomial approximation of minimum excess solver
+"""
+function solve_min_excess(::DPMinExcessSolver,
+                            dist::Matrix{Float64},
+                            s::Int,
+                            t::Int,
+                            scaled_prize::Vector{Float64},
+                            K::Int,
+                            q::Vector{Int})
 
+    n = length(q)
+
+    mask = Vector{Int}()
+
+    child = Dict{Tuple{Vector{Int},Int}, Float64}() # mapping to store minimum cost to start at s, visit nodes whose index stored in mask, and end at V::Int
+    parent = Dict{Tuple{Vector{Int},Int}, Union{Nothing,Tuple{Vector{Int},Int}}}() # mapping to previous state for path reconstruction
+
+    start_mask = [s] # Only visited the start
+
+    child[(start_mask,s)] = 0.0
+    parent[(start_mask,s)] = nothing
+
+    subset_prize = zeros(Int,2^n)
+
+    for mask in 1:2^n
+        subset_prize[mask] = sum(q[mask])
+    end
+
+    # Enumerate through all the possible paths, skipping the ones that revist nodes and save the best ones
+    for mask in 1:2^n
+
+        if !(s in mask)
+            continue
+        end
+
+        for u in 1:n
+            if !haskey(child, (mask,u))
+                continue
+            end
+
+            current_cost = child[(mask,u)]
+
+            for v = 1:n
+                if v in mask
+                    continue
+                end
+
+                new_mask = copy(mask)
+                push!(new_mask, v)
+
+                new_cost = current_cost + dist[u,v]
+
+                # only keep new state if it's better
+                if !haskey(child,(new_mask,v)) || new_cost < child[(new_mask,v)]
+                    child[(new_mask,v)] = new_cost
+                    parent[(new_mask,v)] = (mask,u)
+                end
+            end
+        end
+
+    end
+
+    best_mask = nothing
+    best_cost = Inf
+
+    for mask in 1:2^n
+
+        if !(t in mask)
+            continue
+        end
+
+        if subset_prize[mask] < K
+            continue
+        end
+
+        if haskey(child,(mask,t))
+            cost = child[(mask,t)]
+
+            if cost < best_cost
+                best_cost = cost
+                best_mask = mask
+            end
+        end
+    end
+
+    if isnothing(best_mask) # cannot find feasible solution
+        return nothing
+    end
+
+    path = []
+    state = (best_mask,t)
+
+    while !isnothing(state)
+        (mask,v) = state
+        push!(path,v)
+        state = parent[(mask,v)]
+    end
+
+    reverse(path)
+
+
+    return path
+
+end
+
+
+"""
 Returns:
     path::Vector{Int}
 or
     nothing if unable to reach the target prize.
 
-This is where you will later drop in a stronger solver.
 """
 function solve_min_excess(::GreedyMinExcessSolver,
                           dist::Matrix{Float64},
