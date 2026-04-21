@@ -193,12 +193,9 @@ function evaluate(s0,wp,obstacles,max_steps = 100)
     return (hist, rtot)
 end
 
-if abspath("MCTS.jl") == @__FILE__
+if abspath("src/MCTS.jl") == @__FILE__
     R = GenerateMDP.get_reward_map(2)
     wp = [(50,50)]
-
-
-
 
     #s0 = GenerateMDP.sample_init_state()
     s0 = (41, 21)

@@ -1,15 +1,32 @@
 include("DRTSP.jl")
 include("generateMDP.jl")
+include("genWavefront.jl")
 
 R = GenerateMDP.get_reward_map(2)
 
-wp = [(20,30),(54,20), (90,100), (43,43), (22,21), (3,25)]
+wp = [(25,40),(20,30),(30,30)]
 
-sol = DiscountedWaypointOrdering.order_wp(wp,R)
+obs = []
+for ox in 25:1:33
+    for oy in 31:1:33
+        push!(obs,(ox,oy))
+    end
+end
+
+#solver = DiscountedWaypointOrdering.GreedyMinExcessSolver()
+solver = DiscountedWaypointOrdering.DPMinExcessSolver()
+sol = DiscountedWaypointOrdering.order_wp(wp,R;solver = solver, obs = obs)
 
 path = sol.path
 wp = DiscountedWaypointOrdering.filter_wp(wp,R)
 ordered_wp = wp[path]
+
+wavefront = zeros(Int,size(R))
+
+#wavefront = genWavefront.gen_wave((54,20),wavefront;obs = [(50,50)])
+#path = genWavefront.get_path((20,30),(54,20),wavefront)
+#genWavefront.visualize_wf(wavefront;path = path)
+
 
 using Plots
 
@@ -54,6 +71,16 @@ scatter!(p, wp_y, wp_x,
     markerstrokecolor=:black
 )
 
+o_x = [w[1] for w in obs]
+o_y = [w[2] for w in obs]
+
+scatter!(p, o_y, o_x,
+    label="obstacles",
+    color=:black,
+    markersize=8,
+    markerstrokewidth=2,
+    markerstrokecolor=:black
+)
 
 for i in 1:length(wp_x)
     annotate!(
