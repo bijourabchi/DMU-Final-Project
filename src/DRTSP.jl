@@ -3,6 +3,18 @@ module DiscountedWaypointOrdering
 include("genWavefront.jl")
 using LinearAlgebra
 
+#=
+
+Notes before push:
+
+    Bring back and revamp solve_min_excess routines defined previously.
+    Should have two abstract methods: One as in the previous implementation to solve min excess problem (find good algo for this)
+        another abstract method that implements algorithm 3 from the Farbstein paper
+
+
+=#
+
+
 # ============================================================
 # DATA STRUCTURES
 # ============================================================
@@ -26,6 +38,9 @@ struct DRTSPInstance
     prize::Vector{Float64}
     start::Int
     gamma::Float64
+    l::Int
+    eps::Vector{Float64}
+    delta::Float64
 end
 
 
@@ -63,6 +78,7 @@ Compute shortest path distances from start node s to every node.
 
 
 """
+## TODO: Delete if not needed
 function shortest_from_start(dist::Matrix{Float64}, s::Int)
     return copy(dist[s, :])
 end
@@ -73,6 +89,7 @@ Compute scaled prizes
 
 where d_v is shortest distance from start to v in the rescaled metric.
 """
+## TODO: Delete if not needed
 function compute_scaled_prizes(prize::Vector{Float64}, d_from_start::Vector{Float64})
     n = length(prize)
     scaled = zeros(Float64, n)
@@ -90,6 +107,7 @@ Discretize scaled prizes for prize-target enumeration.
     larger Δ  -> fewer K values, coarser search
     smaller Δ -> more K values, finer search
 """
+## TODO: Delete if not needed
 function discretize_scaled_prizes(scaled_prize::Vector{Float64}, Δ::Float64)
     q = floor.(Int, scaled_prize ./ Δ)
     return q
@@ -99,6 +117,7 @@ end
 """
 Total travel cost of an ordered path.
 """
+## TODO: Delete if not needed
 function path_cost(path::Vector{Int}, dist::Matrix{Float64})
     if length(path) <= 1
         return 0.0
@@ -148,6 +167,7 @@ end
 """
 Sum of scaled prizes collected along a path, counting each node once.
 """
+## TODO: Delete if not needed
 function collected_scaled_prize(path::Vector{Int}, scaled_prize::Vector{Float64})
     seen = falses(length(scaled_prize))
     total = 0.0
@@ -169,366 +189,209 @@ Here:
     path length = total length of the ordered node sequence
     d(s,t)      = shortest path from start to endpoint t
 """
+## TODO: Delete if not needed
 function path_excess(path::Vector{Int}, dist::Matrix{Float64}, s::Int)
     t = path[end]
     return path_cost(path, dist) - dist[s, t]
 end
 
+"""
+Append new node onto existing path
+"""
+function append_path!(P::Vector{Int}, Q::Vector{Int})
+    
+    if isempty(Q)
+        return
+    end
 
-# ============================================================
-# MIN-EXCESS SUBROUTINE INTERFACE
-# ============================================================
+    if isempty(P)
+        append!(P,Q)
+        return
+    end
+
+    if P[end] == Q[1]
+        append!(P, Q[2:end])
+    else
+        append!(P, Q)
+    end
+end
 
 """
-Abstract interface for a min-excess solver.
+black box Min Excess Path Approximation Subroutine
 """
+function solve!(tp_prev,ti,dist,π_i_apx,ki)
+end
+# ============================================================
+# Discounted-TSP SOLVER
+# ============================================================
+
 abstract type AbstractMinExcessSolver end
 
-
-"""
-A placeholder greedy solver.
-
-Idea:
-    grow a path from s toward t by inserting intermediate waypoints
-    that improve scaled-prize-per-added-cost until target K is reached,
-    then append t if needed.
-"""
-struct GreedyMinExcessSolver <: AbstractMinExcessSolver
+struct MinExcessPath <: AbstractMinExcessSolver 
 end
 
-"""
-TO DO:
-    Implement apporoximate min-excess solver from paper. 
-    Obstacle avoidance in solving processing.
-"""
-struct DPMinExcessSolver <: AbstractMinExcessSolver
-end
+function solve_min_excess(::MinExcessPath, guess_tuple, dist, V, s::Int,l::Int, eps::Vector{Float64}, delta::Float64)
+    P = Int[]
+    push!(P,s)
 
-"""
-Exponentional minimum excess solver
-"""
-function solve_min_excess(::DPMinExcessSolver,
-                            dist::Matrix{Float64},
-                            s::Int,
-                            t::Int,
-                            scaled_prize::Vector{Float64},
-                            K::Int,
-                            q::Vector{Int};
-                            require_full_visit::Bool = false)
+    eps_apx = []
 
-    n = length(q)
+    for i = 1:l
+        ti,tpi,ui,ki = guess_tuple[i]
+        tp_prev = (i == 1) ? s : guess_tuple[i-1][2]
 
-    # bitmask for tracking visited nodes
-    bit(v) = 1 << (v-1)
-    in_mask(mask,k) = (mask & bit(k)) != 0
-    add_to_mask(mask,v) = mask | bit(v)
+        π_i_apx = ## TODO Implement apx prize calculation
 
+        Pi, excess_i = solve!(tp_prev,ti,dist,π_i_apx,ki) ## TODO Implement
 
-    n_mask = 1 << n
-    full_mask = n_mask - 1
-    
-
-    child = Dict{Tuple{Int,Int}, Float64}() # mapping to store minimum cost to start at s, visit nodes whose index stored in mask, and end at V::Int
-    parent = Dict{Tuple{Int,Int}, Union{Nothing,Tuple{Int,Int}}}() # mapping to previous state for path reconstruction
-
-    start_mask = bit(s) # Only visited the start
-
-    child[(start_mask,s)] = 0.0
-    parent[(start_mask,s)] = nothing
-
-    subset_prize = zeros(Int,2^n)
-
-    for mask in 0:(n_mask - 1)
-        total = 0
-        for v in 1:n
-            if in_mask(mask, v)
-                total += q[v]
-            end
-        end
-        subset_prize[mask + 1] = min(total, K)   # cap at K
-    end
-
-    # Enumerate through all the possible paths, skipping the ones that revist nodes and save the best ones
-    for mask in 0:(n_mask-1)
-
-        if !in_mask(mask,s)
-            continue
-        end
-
-        for u in 1:n
-            state = (mask, u)
-
-            if !haskey(child, state)
-                continue
-            end
-
-            current_cost = child[state]
-
-            for v = 1:n
-                if in_mask(mask,v)
-                    continue
-                end
-
-                new_mask = add_to_mask(mask,v)
-                new_state = (new_mask,v)
-                new_cost = current_cost + dist[u,v]
-
-                # only keep new state if it's better
-                if !haskey(child,new_state) || new_cost < child[new_state]
-                    child[new_state] = new_cost
-                    parent[new_state] = state
-                end
-            end
-        end
-
-    end
-
-    best_state = nothing
-    best_cost = Inf
-
-    for mask in 0:(n_mask-1)
-
-        if !in_mask(mask,t)
-            continue
-        end
-
-        if require_full_visit
-            if mask != full_mask
-                continue
-            end
-        elseif subset_prize[mask+1] < K
-            continue
-        end
-
-        state = (mask,t)
-
-        if haskey(child,(mask,t))
-            cost = child[(mask,t)]
-
-            if cost < best_cost
-                best_cost = cost
-                best_state = state
-            end
-        end
-    end
-
-    if isnothing(best_state) # cannot find feasible solution
-        return nothing
-    end
-
-    path = Int[]
-    state = best_state
-
-    while !isnothing(state)
-        (mask,v) = state
-        push!(path,v)
-        state = parent[(mask,v)]
-    end
-
-    reverse!(path)
-
-
-    return path
-
-end
-
-
-"""
-Returns:
-    path::Vector{Int}
-or
-    nothing if unable to reach the target prize.
-
-"""
-function solve_min_excess(::GreedyMinExcessSolver,
-                          dist::Matrix{Float64},
-                          s::Int,
-                          t::Int,
-                          scaled_prize::Vector{Float64},
-                          K::Int,
-                          q::Vector{Int};
-                          require_full_visit::Bool = false)
-
-    n = length(scaled_prize)
-
-    path = [s]
-    visited = falses(n)
-    visited[s] = true
-
-    current = s
-    collected = q[s]
-
-    # Candidate intermediate nodes exclude start and endpoint initially.
-    target_reached() = require_full_visit ? all(visited[v] || v == t for v in 1:n) : collected >= K
-
-    while !target_reached()
-        best_node = 0
-        best_score = -Inf
-
-        for v in 1:n
-            if visited[v] || v == t
-                continue
-            end
-
-            added_cost = dist[current, v]
-            if added_cost <= 0
-                continue
-            end
-
-            # Simple benefit/cost heuristic
-            score = q[v] / added_cost
-
-            if score > best_score
-                best_score = score
-                best_node = v
-            end
-        end
-
-        if best_node == 0
-            break
-        end
-
-        push!(path, best_node)
-        visited[best_node] = true
-        collected += q[best_node]
-        current = best_node
-    end
-
-    # Always try to end at t
-    if !visited[t]
-        push!(path, t)
-        visited[t] = true
-        collected += q[t]
-    end
-
-    if require_full_visit
-        if !all(visited)
+        if Pi == nothing
             return nothing
         end
-    elseif collected < K
-        return nothing
+
+        append_path!(P,Q_i)
+
+        if isempty(Q_i) || Q_i[end] != tp_i
+            push!(P,tp_i)
+        end
+
+        push!(eps_apx,excess_i)
     end
 
-    return path
+    return P
 end
 
-
-# ============================================================
-# OUTER DISCOUNTED-REWARD-TSP DRIVER
-# ============================================================
+struct RewardCollectingCycles <: AbstractMinExcessSolver
+end
 
 """
-Main high-level planner.
+Main high level planner from Farbstein paper.
 
-Arguments:
-    instance         : DRTSP instance
-    Δ                : discretization step for scaled prizes
-    solver           : min-excess subroutine
-
-Returns:
-    best DRTSPSolution found
-
+Returns best solution found
 """
-function discounted_waypoint_order(instance::DRTSPInstance;
-                                   Δ::Float64 = 1e-2,
-                                   solver::AbstractMinExcessSolver = GreedyMinExcessSolver(),
-                                   visit_all::Bool = false)
+function discounted_waypoint_order(instance::DRTSPInstance; solver::AbstractMinExcessSolver = MinExcessPath())
 
-    n = length(instance.prize)
+
+    # Step 1: rescale so discount becomes 1/2
+    dist_hat = rescale_distances(instance.dist, instance.gamma)
+
+    # Step 2: remove zero-prize nodes except possibly the start
+    V = [v for v in 1:length(instance.prize) if v == instance.start || instance.prize[v] > 0]
+    n = length(V)
     s = instance.start
 
-    # Step 1: rescale so the discount becomes 1/2
-    dist_rescaled = rescale_distances(instance.dist, instance.gamma)
-
-    # Step 2: shortest distances from start in rescaled metric
-    d_from_start = shortest_from_start(dist_rescaled, s)
-
-    # Step 3: scaled prizes
-    scaled_prize = compute_scaled_prizes(instance.prize, d_from_start)
-
-    # Step 4: discretize scaled prizes
-    q = discretize_scaled_prizes(scaled_prize, Δ)
-    maxK = sum(q)
-
-    # Initialize 
     best_path = [s]
-    best_reward = instance.prize[s]
-    best_scaled = scaled_prize[s]
-    best_cost = 0.0
+    best_value = true_discounted_reward(best_path, instance.prize, instance.dist, instance.gamma)
 
-    if visit_all
-        best_path = Int[]
-        best_reward = -Inf
-        best_scaled = 0.0
-        best_cost = Inf
-    end
+    # store guesses as tuples: (t_i, tp_i, u_i, k_i)
+    guess_tuple = Tuple{Int,Int,Int,Float64}[]
+    
+    recurse!(1, guess_tuple, instance, dist_hat, V, n, s, solver, best_path, best_value)
 
-    # below is polynomial time approximation
-    # guess endpoint t
-    for t in 1:n
-        if t == s
-            continue
-        end
-
-        if visit_all
-            candidate = solve_min_excess(
-                solver,
-                dist_rescaled,
-                s,
-                t,
-                scaled_prize,
-                maxK,
-                q;
-                require_full_visit = true,
-            )
-
-            if candidate !== nothing
-                reward = true_discounted_reward(candidate, instance.prize, instance.dist, instance.gamma)
-                scpr   = collected_scaled_prize(candidate, scaled_prize)
-                cost   = path_cost(candidate, instance.dist)
-
-                if reward > best_reward
-                    best_reward = reward
-                    best_path = candidate
-                    best_scaled = scpr
-                    best_cost = cost
-                end
-            end
-            continue
-        end
-
-        # guess target scaled prize K
-        for K in 1:maxK
-            candidate = solve_min_excess(solver, dist_rescaled, s, t, scaled_prize, K, q)
-
-            if candidate === nothing
-                continue
-            end
-
-            # Score using TRUE discounted reward in the original metric
-            reward = true_discounted_reward(candidate, instance.prize, instance.dist, instance.gamma)
-            scpr   = collected_scaled_prize(candidate, scaled_prize)
-            cost   = path_cost(candidate, instance.dist)
-
-            if reward > best_reward
-                best_reward = reward
-                best_path = candidate
-                best_scaled = scpr
-                best_cost = cost
-            end
-        end
-    end
-
-    if visit_all && isempty(best_path)
-        return DRTSPSolution([s], instance.prize[s], scaled_prize[s], 0.0)
-    end
-
-    return DRTSPSolution(best_path, best_reward, best_scaled, best_cost)
+    return best_path
 end
 
+"""
+
+"""
+function recurse!(i::Int,
+                  guess_tuple,
+                  instance::DRTSPInstance,
+                  dist_hat,
+                  V,
+                  n::Int,
+                  s::Int,
+                  solver::AbstractMinExcessSolver,
+                  best_path,
+                  best_value)
+
+    # Base case: full guess tuple has been formed
+    if i > l
+        ## TODO: Fill in algo 2 and 3 solver
+    end
+
+    π_i, π_i_ub = compute_stage_prizes(i, guess_tuple, instance.prize, dist_hat, V, s, instance.eps)
+
+    for t_i in V
+        for tp_i in V
+            for u_i in V
+                K_list = generate_k_candidates(u_i, π_i, π_i_ub, δ, n)
+
+                for k_i in K_list
+                    push!(guess_tuple, (t_i, tp_i, u_i, k_i))
+                    recurse!(i + 1, guess_tuple, instance, dist_hat, V, n, s, solver, best_path, best_value)
+                    pop!(guess_tuple)
+                end
+            end
+        end
+    end
+end
+
+function compute_stage_prizes(i::Int,
+                              guess_tuple,
+                              prize::Vector{Float64},
+                              dist_hat,
+                              V,
+                              s::Int,
+                              eps::Vector{Float64})
+
+    π_i = Dict{Int,Float64}()
+    π_i_ub = Dict{Int,Float64}()
+
+    if i == 1
+        for v in V
+            val = prize[v] * 0.5^(dist_hat[s, v])
+            π_i[v] = val
+            π_i_ub[v] = val
+        end
+        return π_i, π_i_ub
+    end
+
+    base_dist_exp = 0.0
+    for j in 1:(i-1)
+        t_j, tp_j, _, _ = guess_tuple[j]
+        tp_prev = (j == 1) ? s : guess_tuple[j-1][2]
+        base_dist_exp += dist_hat[tp_prev, t_j] + dist_hat[t_j, tp_j]
+    end
+
+    base_eps_exp = sum(eps[1:(i-1)])
+    tp_prev = guess_tuple[i-1][2]
+
+    for v in V
+        ub = prize[v] * 0.5^(base_dist_exp + dist_hat[tp_prev, v])
+        π_i_ub[v] = ub
+        π_i[v] = ub * 0.5^(base_eps_exp)
+    end
+
+    return π_i, π_i_ub
+end
+
+function generate_k_candidates(u_i::Int,
+                               π_i,
+                               π_i_ub,
+                               delta::Float64,
+                               n::Int)
+
+    lower = π_i[u_i]
+    upper = n * π_i_ub[u_i]
+
+    if lower <= 0.0
+        return Float64[]
+    end
+
+    K_list = Float64[]
+    k = lower
+
+    while k < upper
+        push!(K_list, k)
+        k *= (1.0 + delta)
+    end
+
+    push!(K_list, k)
+    return K_list
+end
 
 # ============================================================
-# HELPER
+# Helper Functions
 # ============================================================
 
 """
@@ -542,6 +405,7 @@ Inputs:
 This assumes you already solved or estimated the low-level travel cost
 between each pair of waypoints.
 """
+# TODO: Update this function
 function build_waypoint_instance(waypoint_costs::Matrix{Float64},
                                  waypoint_prize::Vector{Float64},
                                  gamma::Float64;
@@ -654,31 +518,5 @@ function order_wp(wp::Vector{Tuple{Int,Int}}, R::Matrix{Float64};
     return sol
 end
 
-function demo()
-    # Example:
-    # node 1 = start
-    # nodes 2:5 = waypoints
-    dist = [
-        0.0  2.0  5.0  6.0  4.0;
-        2.0  0.0  9.0  5.0  3.0;
-        5.0  9.0  0.0  9.0  2.0;
-        6.0  5.0  9.0  0.0  8.0;
-        4.0  3.0  2.0  8.0  0.0
-    ]
-
-    prize = [0.0, 10.0, 8.0, 12.0, 6.0]
-    gamma = 0.90
-
-    instance = build_waypoint_instance(dist, prize, gamma)
-
-    sol = discounted_waypoint_order(instance; Δ=0.1)
-
-    println("Best path: ", sol.path)
-    println("True discounted reward: ", sol.reward)
-    println("Scaled prize collected: ", sol.scaled_prize)
-    println("Travel cost: ", sol.travel_cost)
-
-    return sol
-end
 
 end # module
