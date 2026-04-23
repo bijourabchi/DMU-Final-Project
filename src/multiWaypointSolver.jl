@@ -46,6 +46,12 @@ function guide(::MCTS, start::Tuple{Int,Int}, wp::Tuple{Int,Int}, R::Matrix{Floa
 end
 
 """
+Not explicetly needed for planners other than MCTS
+
+    larger the i -> more freedom we give the planner. detour_budget will be given by an exponential growth 2^i
+"""
+
+"""
 generate_path
 
 Inputs:
@@ -125,7 +131,7 @@ Outputs:
 sol::plannerSolution
 
 """
-function planner(planner::String,i::Int, start::Tuple{Int,Int}, wp::Vector{Tuple{Int,Int}};obstacles::Vector{Tuple{Int,Int}} = [])
+function planner(planner::String,r::Int, start::Tuple{Int,Int}, wp::Vector{Tuple{Int,Int}};obstacles::Vector{Tuple{Int,Int}} = [])
     
     @assert planner in SOLVERS "Not a valid solver"
 
@@ -134,7 +140,7 @@ function planner(planner::String,i::Int, start::Tuple{Int,Int}, wp::Vector{Tuple
     end # Fill in as more methods are implemented
 
     # Load in reward matrix
-    R = get_reward(i)
+    R = get_reward(r)
 
     # Append start onto wp list for ordering method
     wp_with_start = copy(wp)

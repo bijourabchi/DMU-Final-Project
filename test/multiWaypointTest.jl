@@ -179,10 +179,11 @@ obstacles = combine_obstacles(
     rectangle_obstacles(20:22, 39:55),
 )
 
-i = 7
+r_map = 7
 
-sol = WaypointPath.planner(planner_name, i, start, wp; obstacles = obstacles)
-reward_map = WaypointPath.get_reward(i)
+
+sol = WaypointPath.planner(planner_name, r_map, start, wp; obstacles = obstacles)
+reward_map = WaypointPath.get_reward(r_map)
 visited_waypoints = extract_visited_waypoints(sol.hist, wp)
 
 plot_obj = plot_solution(
@@ -192,12 +193,12 @@ plot_obj = plot_solution(
     visited_waypoints,
     sol.hist,
     obstacles,
-    i,
+    r_map,
     planner_name,
     sol.rtot,
 )
 
-output_path = joinpath(FIGURE_DIR, "multiWaypointTest_$(planner_name)_map$(i).png")
+output_path = joinpath(FIGURE_DIR, "multiWaypointTest_$(planner_name)_map$(r_map).png")
 savefig(plot_obj, output_path)
 
 println("Saved multi-waypoint plot to $(output_path)")

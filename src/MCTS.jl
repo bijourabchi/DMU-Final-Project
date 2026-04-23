@@ -331,7 +331,7 @@ module solveMCTS
                       wp::Tuple{Int,Int},
                       obstacles::Vector{Tuple{Int,Int}},
                       R::Matrix{Float64};
-                      max_steps::Int = 1000, detour_budget::Float64 = 10.0)
+                      max_steps::Int = 1000)
 
         rtot = 0.0
         t = 0
@@ -341,6 +341,8 @@ module solveMCTS
 
         S = typeof(s)
         Atype = typeof(:left)
+        
+        
 
         # These are appropriate containers for the state-action tree statistics.
         n = Dict{Tuple{S, Atype}, Int}()
@@ -352,7 +354,7 @@ module solveMCTS
         obstacle_set = Set{Tuple{Int,Int}}(obstacles)
         wavefront = build_wavefront(wp, R, obstacle_set)
         shortest_distance = wavefront_distance(wavefront, R, s0)
-
+        detour_budget= max(14.0, round(0.25*shortest_distance))
         if !isfinite(shortest_distance)
             return (hist, -Inf)
         end
