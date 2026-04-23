@@ -4,7 +4,6 @@ using Plots
 module solveMCTS
     include("generateMDP.jl")
 
-    const waypoint_bonus = 1000
     const visited_bonus = -100
     const obstacle_bonus = -1e10
     const ACTION_STEPS = (
@@ -18,18 +17,32 @@ module solveMCTS
         (:downleft, (-1, -1)),
     )
 
+    struct SearchState
+        pos::Tuple{Int,Int}
+        travel::Float64
+    end
+
+    state_position(s::Tuple{Int,Int}) = s
+    state_position(s::SearchState) = s.pos
+
+    function step_cost(s::Tuple{Int,Int}, sp::Tuple{Int,Int})
+        return s == sp ? 0.0 : 1.0
+    end
+
     mutable struct MCTS
         ## Tracking MCTS properties
         goal
         visited
         obstacle_set
         wavefront
+        shortest_distance
+        detour_budget
         N # (S,A) Counter
         Q
         t # (S A Sp) Counter
         R # Reward matrix
         A # Action Space
-        T # Tranisition fxn
+        T # Transition fxn
         discount
     end
 
@@ -80,29 +93,95 @@ module solveMCTS
         return wavefront
     end
 
-    function wavefront_distance(m::MCTS, s::Tuple{Int,Int})
-        if !GenerateMDP.inBounds(s, m.R)
+    function wavefront_distance(wavefront::Matrix{Int},
+                                R::Matrix{Float64},
+                                s::Tuple{Int,Int})
+        if !GenerateMDP.inBounds(s, R)
             return Inf
         end
 
-        distance = m.wavefront[s[1], s[2]]
-        return distance > 1 ? distance : Inf
+        distance = wavefront[s[1], s[2]]
+        if distance <= 1
+            return Inf
+        end
+
+        return max(distance - 2, 0)
     end
 
-    function rollout(m::MCTS,s0,policy,max_steps = 100)
-        rtot = 0
+    function wavefront_distance(m::MCTS, s)
+        return wavefront_distance(m.wavefront, m.R, state_position(s))
+    end
+
+    function advance_state(m::MCTS, s::SearchState, a)
+        sp = m.T(s.pos, a, m.R)
+        return SearchState(sp, s.travel + step_cost(s.pos, sp))
+    end
+
+    leg_budget(m::MCTS) = m.shortest_distance + m.detour_budget
+
+    function is_feasible_state(m::MCTS, s::SearchState)
+        h = wavefront_distance(m, s)
+        return isfinite(h) && (s.travel + h <= leg_budget(m))
+    end
+
+    function action_target(s::Tuple{Int,Int}, action)
+        for (candidate, (dr, dc)) in ACTION_STEPS
+            if candidate == action
+                return (s[1] + dr, s[2] + dc)
+            end
+        end
+
+        error("Unknown action: $action")
+    end
+
+    function feasible_actions(m::MCTS, s::SearchState)
+        if state_position(s) == m.goal
+            return Symbol[]
+        end
+
+        pos = state_position(s)
+        actions = Symbol[]
+
+        for (action, _) in ACTION_STEPS
+            neighbor = action_target(pos, action)
+            if !is_valid_neighbor(m, neighbor)
+                continue
+            end
+
+            sp = advance_state(m, s, action)
+            if is_feasible_state(m, sp)
+                push!(actions, action)
+            end
+        end
+
+        return actions
+    end
+
+    function rollout(m::MCTS, s0, policy, max_steps = 100)
+        rtot = 0.0
         t = 0
         s = s0
-        hist = [s]
-        while t < max_steps && s != m.goal
-            a = policy(m,s)
-            r = m.R[s[1],s[2]]
-            sp = GenerateMDP.T(s,a,m.R)
+        hist = [state_position(s)]
+
+        while t < max_steps && state_position(s) != m.goal
+            actions = feasible_actions(m, s)
+            if isempty(actions)
+                return (hist, -Inf)
+            end
+
+            a = policy(m, s, actions)
+            if isnothing(a)
+                return (hist, -Inf)
+            end
+
+            sp = advance_state(m, s, a)
+            sp_pos = state_position(sp)
+            r = m.R[sp_pos[1], sp_pos[2]]
 
             rtot += m.discount^t * r
             t += 1
             s = sp
-            push!(hist,s)
+            push!(hist, sp_pos)
         end
 
         return (hist, rtot)
@@ -112,16 +191,13 @@ module solveMCTS
         return GenerateMDP.inBounds(s, m.R) && !(s in m.obstacle_set)
     end
 
-    function fallback_goal_action(m::MCTS, s::Tuple{Int,Int})
+    function fallback_goal_action(m::MCTS, s, actions::Vector{Symbol})
+        pos = state_position(s)
         best_action = nothing
         best_distance = Inf
 
-        for (action, (dr, dc)) in ACTION_STEPS
-            sp = (s[1] + dr, s[2] + dc)
-            if !is_valid_neighbor(m, sp)
-                continue
-            end
-
+        for action in actions
+            sp = action_target(pos, action)
             distance = euclidean_distance(sp, m.goal)
             if distance < best_distance
                 best_distance = distance
@@ -129,23 +205,21 @@ module solveMCTS
             end
         end
 
-        return isnothing(best_action) ? rand(m.A) : best_action
+        return best_action
     end
 
-    function wp_heuristic(m::MCTS, s::Tuple{Int,Int})
-        if s == m.goal
-            return rand(m.A)
+    function wp_heuristic(m::MCTS, s, actions::Vector{Symbol})
+        pos = state_position(s)
+
+        if pos == m.goal
+            return nothing
         end
 
         best_action = nothing
         best_distance = Inf
 
-        for (action, (dr, dc)) in ACTION_STEPS
-            sp = (s[1] + dr, s[2] + dc)
-            if !is_valid_neighbor(m, sp)
-                continue
-            end
-
+        for action in actions
+            sp = advance_state(m, s, action)
             distance = wavefront_distance(m, sp)
             if distance < best_distance
                 best_distance = distance
@@ -157,142 +231,171 @@ module solveMCTS
             return best_action
         end
 
-        return fallback_goal_action(m, s)
+        return fallback_goal_action(m, s, actions)
     end
 
-    function heuristic(m::MCTS,s)
-        return rand(m.A) # Random Action
+    function heuristic(m::MCTS, s, actions::Vector{Symbol})
+        return isempty(actions) ? nothing : rand(actions)
     end
 
-    function simulate!(m::MCTS,s, d = 100)
+    function state_initialized(m::MCTS, s::SearchState)
+        return any(haskey(m.N, (s, a)) for a in m.A)
+    end
+
+    function simulate!(m::MCTS, s, d = 100)
+        if state_position(s) == m.goal
+            return 0.0
+        end
+
+        actions = feasible_actions(m, s)
+        if isempty(actions)
+            return -Inf
+        end
 
         if d <= 0
-            return rollout(m,s,wp_heuristic)[2]
+            return rollout(m, s, wp_heuristic)[2]
         end
 
-        A = m.A
-        γ = m.discount
+        gamma = m.discount
 
-        if !haskey(m.N, (s,first(A)))
-            for a in A
-                m.N[(s,a)] = 0 
-                m.Q[(s,a)] = 0.0
+        if !state_initialized(m, s)
+            for a in actions
+                m.N[(s, a)] = 0
+                m.Q[(s, a)] = 0.0
             end
 
-            return rollout(m,s,wp_heuristic)[2]
+            return rollout(m, s, wp_heuristic)[2]
         end
 
-        a = explore(m,s)
-        sp = m.T(s,a,m.R)
-
-        r = m.R[sp[1],sp[2]]
-        alpha = 0.5
-        if r < 0.5
-            alpha = 0.5
+        a = explore(m, s, actions)
+        if isnothing(a)
+            return -Inf
         end
 
-        dist_s = wavefront_distance(m, s)
-        dist_sp = wavefront_distance(m, sp)
-        if dist_s > dist_sp
-            r += alpha + 1 / max(dist_sp, 1.0)
-        end
+        sp = advance_state(m, s, a)
+        sp_pos = state_position(sp)
 
-        if sp in m.visited
+        r = m.R[sp_pos[1], sp_pos[2]]
+
+        if sp_pos in m.visited
             r = visited_bonus
         end
-        if sp == m.goal
-            r = waypoint_bonus
-        end
-        if sp in m.obstacle_set
+        if sp_pos in m.obstacle_set
             r = obstacle_bonus
         end
-        
-        Q = r + γ * simulate!(m,s,d-1)
 
-        m.N[(s,a)] += 1
-        m.Q[(s,a)] += (Q-m.Q[(s,a)])/m.N[(s,a)]
+        Q = r + gamma * simulate!(m, sp, d - 1)
+
+        m.N[(s, a)] += 1
+        m.Q[(s, a)] += (Q - m.Q[(s, a)]) / m.N[(s, a)]
         tval = get(m.t, (s, a, sp), 0)
-        m.t[(s,a,sp)] = tval + 1
+        m.t[(s, a, sp)] = tval + 1
 
         return Q
-
     end
 
-    function explore(m::MCTS,s)
+    function explore(m::MCTS, s, actions::Vector{Symbol})
+        if isempty(actions)
+            return nothing
+        end
+
         N = m.N
         Q = m.Q
         c = 7
 
-        A = m.A
+        bonus = (Nsa, Ns) -> Nsa == 0 ? Inf : sqrt(log(Ns) / Nsa)
+        Ns = sum(N[(s, a)] for a in actions)
 
-        bonus = (Nsa, Ns) -> Nsa == 0 ? Inf : sqrt(log(Ns)/Nsa)
-        Ns = sum(N[(s,a)] for a in A)
-
-        return argmax(a -> begin
-            sp = m.T(s, a, m.R)
-            d = wavefront_distance(m, sp)
-            Q[(s,a)] + c * bonus(N[(s,a)], Ns) - d
-        end, A)
+        return argmax(a -> Q[(s, a)] + c * bonus(N[(s, a)], Ns), actions)
     end
 
-    function select_action(m,s,A)
-
-        for _ in  1:1000
-            simulate!(m,s) # 1000 iterations to choose each action, d = 100 by default
+    function select_action(m, s)
+        actions = feasible_actions(m, s)
+        if isempty(actions)
+            return nothing
         end
 
-        return argmax(a -> m.Q[(s,a)], A)
+        for _ in 1:1000
+            simulate!(m, s) # 1000 iterations to choose each action, d = 100 by default
+        end
+
+        return argmax(a -> m.Q[(s, a)], actions)
     end
 
     """
     MCTS planner: will navigate from start s0 to single waypoint wp
+    Main thing to play around with: 
+    detour_budget::Float64 = 10 -> almost like a freedom knob giving the planner more time to explore the larger it is.
     """
-    function evaluate(s0::Tuple{Int,Int},wp::Tuple{Int,Int},obstacles::Vector{Tuple{Int,Int}},R::Matrix{Float64};max_steps::Int = 1000)
+    function evaluate(s0::Tuple{Int,Int},
+                      wp::Tuple{Int,Int},
+                      obstacles::Vector{Tuple{Int,Int}},
+                      R::Matrix{Float64};
+                      max_steps::Int = 1000, detour_budget::Float64 = 10.0)
 
-        rtot = 0
+        rtot = 0.0
         t = 0
-        s = s0
-        hist = [s]
+        s = SearchState(s0, 0.0)
+        hist = [state_position(s)]
         Tr = GenerateMDP.T
-        
+
         S = typeof(s)
         Atype = typeof(:left)
 
-        # These would be appropriate containers for your Q, N, and t dictionaries:
+        # These are appropriate containers for the state-action tree statistics.
         n = Dict{Tuple{S, Atype}, Int}()
         q = Dict{Tuple{S, Atype}, Float64}()
         tt = Dict{Tuple{S, Atype, S}, Int}()
 
-        visited = [s]
+        visited = [state_position(s)]
         A = [:left, :right, :up, :down, :upright, :upleft, :downright, :downleft]
         obstacle_set = Set{Tuple{Int,Int}}(obstacles)
         wavefront = build_wavefront(wp, R, obstacle_set)
+        shortest_distance = wavefront_distance(wavefront, R, s0)
 
-        m = MCTS(wp,visited,obstacle_set,wavefront, n,q,tt,R,A,Tr,0.95)
+        if !isfinite(shortest_distance)
+            return (hist, -Inf)
+        end
 
-        
-        while s != wp && t < max_steps
-            A = [:left, :right, :up, :down, :upright, :upleft, :downright, :downleft]
-            a = select_action(m,s, A)
-            sp = Tr(s,a,R)
-            r = R[sp[1],sp[2]]
+        print(typeof(detour_budget))
+        m = MCTS(wp,
+                 visited,
+                 obstacle_set,
+                 wavefront,
+                 shortest_distance,
+                 detour_budget,
+                 n,
+                 q,
+                 tt,
+                 R,
+                 A,
+                 Tr,
+                 0.95)
+
+        while state_position(s) != wp && t < max_steps
+            a = select_action(m, s)
+            if isnothing(a)
+                break
+            end
+
+            sp = advance_state(m, s, a)
+            sp_pos = state_position(sp)
+            r = R[sp_pos[1], sp_pos[2]]
             rtot += r
             t += 1
             s = sp
-            push!(hist,s)
-            push!(visited,s)
+            push!(hist, sp_pos)
+            push!(visited, sp_pos)
 
-            if mod(t,20) == 0 || t == 1
-                println("s = $s")
+            if mod(t, 20) == 0 || t == 1
+                println("s = $(sp_pos), g = $(s.travel)")
             end
         end
 
-        if s != wp # Did not reach waypoint
+        if state_position(s) != wp # Did not reach waypoint
             rtot = -Inf
         end
 
         return (hist, rtot)
     end
-
-
 end
