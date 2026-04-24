@@ -112,6 +112,18 @@ module solveMCTS
         return wavefront_distance(m.wavefront, m.R, state_position(s))
     end
 
+    function default_detour_budget(shortest_distance::Real)
+        return max(14.0, round(0.25 * Float64(shortest_distance)))
+    end
+
+    function resolve_detour_budget(shortest_distance::Real, detour_budget)
+        if isnothing(detour_budget)
+            return default_detour_budget(shortest_distance)
+        end
+
+        return Float64(detour_budget)
+    end
+
     function advance_state(m::MCTS, s::SearchState, a)
         sp = m.T(s.pos, a, m.R)
         return SearchState(sp, s.travel + step_cost(s.pos, sp))
@@ -331,7 +343,8 @@ module solveMCTS
                       wp::Tuple{Int,Int},
                       obstacles::Vector{Tuple{Int,Int}},
                       R::Matrix{Float64};
-                      max_steps::Int = 1000)
+                      max_steps::Int = 1000,
+                      detour_budget = nothing)
 
         rtot = 0.0
         t = 0
@@ -354,18 +367,17 @@ module solveMCTS
         obstacle_set = Set{Tuple{Int,Int}}(obstacles)
         wavefront = build_wavefront(wp, R, obstacle_set)
         shortest_distance = wavefront_distance(wavefront, R, s0)
-        detour_budget= max(14.0, round(0.25*shortest_distance))
         if !isfinite(shortest_distance)
             return (hist, -Inf)
         end
 
-        print(typeof(detour_budget))
+        resolved_detour_budget = resolve_detour_budget(shortest_distance, detour_budget)
         m = MCTS(wp,
                  visited,
                  obstacle_set,
                  wavefront,
                  shortest_distance,
-                 detour_budget,
+                 resolved_detour_budget,
                  n,
                  q,
                  tt,

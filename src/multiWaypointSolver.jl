@@ -25,6 +25,8 @@ rtot::Float64 -> Total accumulated reward
 struct plannerSolution
     hist::Vector{Tuple{Int,Int}} 
     rtot::Float64
+    ordered_wp::Vector{Tuple{Int,Int}}
+    detour_budgets::Vector{Float64}
 end
 
 ## Point a to b planning methods
@@ -36,13 +38,47 @@ abstract type waypointGuidance end
 """
 MCTS solver
 """
-struct MCTS <: waypointGuidance
+struct MCTS <: waypointGuidance end
+
+function guide(::MCTS,
+               start::Tuple{Int,Int},
+               wp::Tuple{Int,Int},
+               R::Matrix{Float64};
+               obstacles::Vector{Tuple{Int,Int}} = [],
+               detour_budget = nothing)
+
+    return solveMCTS.evaluate(start, wp, obstacles, R; detour_budget = detour_budget)
+
 end
 
-function guide(::MCTS, start::Tuple{Int,Int}, wp::Tuple{Int,Int}, R::Matrix{Float64}; obstacles::Vector{Tuple{Int,Int}} = [])
+function resolve_reward_map(spec)
+    if spec isa Integer
+        return get_reward(spec)
+    elseif spec isa AbstractMatrix
+        return Matrix{Float64}(spec)
+    end
 
-    return solveMCTS.evaluate(start,wp,obstacles,R)
+    throw(ArgumentError("Unsupported reward map specification: $(typeof(spec))"))
+end
 
+function resolve_leg_detour_budget(start::Tuple{Int,Int},
+                                   wp::Tuple{Int,Int},
+                                   R::Matrix{Float64},
+                                   obstacles::Vector{Tuple{Int,Int}};
+                                   detour_budget = nothing)
+    if !isnothing(detour_budget)
+        return Float64(detour_budget)
+    end
+
+    obstacle_set = Set{Tuple{Int,Int}}(obstacles)
+    wavefront = solveMCTS.build_wavefront(wp, R, obstacle_set)
+    shortest_distance = solveMCTS.wavefront_distance(wavefront, R, start)
+
+    if !isfinite(shortest_distance)
+        return Inf
+    end
+
+    return solveMCTS.default_detour_budget(shortest_distance)
 end
 
 """
@@ -69,14 +105,32 @@ function generate_path(solver::waypointGuidance,
                        start::Tuple{Int,Int},
                        wp::Vector{Tuple{Int,Int}},
                        R::Matrix{Float64};
-                       obstacles::Vector{Tuple{Int,Int}} = [])
+                       obstacles::Vector{Tuple{Int,Int}} = [],
+                       detour_budget = nothing)
 
     hist = Tuple{Int,Int}[start]
     rtot = 0.0
     current = start
+    detour_budgets = Float64[]
 
     for w in wp
-        sub_hist, sub_rtot = guide(solver, current, w, R; obstacles = obstacles)
+        leg_detour_budget = resolve_leg_detour_budget(
+            current,
+            w,
+            R,
+            obstacles;
+            detour_budget = detour_budget,
+        )
+        push!(detour_budgets, leg_detour_budget)
+
+        sub_hist, sub_rtot = guide(
+            solver,
+            current,
+            w,
+            R;
+            obstacles = obstacles,
+            detour_budget = leg_detour_budget,
+        )
 
         if sub_hist[end] != w
             println("Waypoint $w not reached, moving to next wp")
@@ -91,7 +145,7 @@ function generate_path(solver::waypointGuidance,
         
     end
 
-    return (hist, rtot)
+    return (hist, rtot, detour_budgets)
 end
 
 ## Waypoint ordering/processing methods
@@ -100,7 +154,7 @@ function filter_wp(wp::Vector{Tuple{Int, Int}}, R::Matrix{Float64}; obs = [])
     
     filtered_wp = Vector{Tuple{Int,Int}}()
     for w in wp
-        if GenerateMDP.inBounds(w, R) && !(w in obs)
+        if GenerateMDP.inBounds(w, R) && !(w in obs) 
             push!(filtered_wp, w)
         end
 
@@ -131,7 +185,12 @@ Outputs:
 sol::plannerSolution
 
 """
-function planner(planner::String,r::Int, start::Tuple{Int,Int}, wp::Vector{Tuple{Int,Int}};obstacles::Vector{Tuple{Int,Int}} = [])
+function planner(planner::String,
+                 reward_spec,
+                 start::Tuple{Int,Int},
+                 wp::Vector{Tuple{Int,Int}};
+                 obstacles::Vector{Tuple{Int,Int}} = [],
+                 detour_budget = nothing)
     
     @assert planner in SOLVERS "Not a valid solver"
 
@@ -140,7 +199,7 @@ function planner(planner::String,r::Int, start::Tuple{Int,Int}, wp::Vector{Tuple
     end # Fill in as more methods are implemented
 
     # Load in reward matrix
-    R = get_reward(r)
+    R = resolve_reward_map(reward_spec)
 
     # Append start onto wp list for ordering method
     wp_with_start = copy(wp)
@@ -154,9 +213,16 @@ function planner(planner::String,r::Int, start::Tuple{Int,Int}, wp::Vector{Tuple
     for idx in wp_idx
         push!(ordered_wp, wp_with_start[idx])
     end
-    (hist, rtot) = generate_path(solver,start,ordered_wp,R; obstacles = obstacles)
+    hist, rtot, detour_budgets = generate_path(
+        solver,
+        start,
+        ordered_wp,
+        R;
+        obstacles = obstacles,
+        detour_budget = detour_budget,
+    )
 
-    return plannerSolution(hist,rtot)
+    return plannerSolution(hist, rtot, ordered_wp, detour_budgets)
 end
 
 end
